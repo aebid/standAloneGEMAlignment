@@ -46,7 +46,7 @@ void doFit(bool doDx, bool doDy, bool doDphiz) {
   double par[4] = {0., 0., 0., 0.5};
   mfit.DefineParameter(0, "dx", par[0], 0.1, 0, 0); 
   mfit.DefineParameter(1, "dy", par[1], 0.1, 0, 0); 
-  mfit.DefineParameter(2, "dhpiz", par[2], 0.001, 0, 0); 
+  mfit.DefineParameter(2, "dphiz", par[2], 0.001, 0, 0); 
   mfit.DefineParameter(3, "sig", par[3], 0.01, 0, 0); 
   mfit.FixParameter(3);
   if (!doDx) mfit.FixParameter(0);
@@ -97,34 +97,45 @@ void doFit(bool doDx, bool doDy, bool doDphiz) {
 }
 
 int main() {
-  std::ofstream myfile;
-  myfile.open ("fitter.csv");  
-  TFile *tf = new TFile("initial.root","READ");
-  TTree *tmpTr = (TTree*)tf->Get("analyser/MuonData");
-  double dx, dy, dz, dphix, dphiy, dphiz;
-  int detNum;
-  dz = 0.0; dphix = 0.0; dphiy = 0.0;
-  bool doDx = true;
-  bool doDy = true;
-  bool doDphiz = true;
-  for (int j = -1; j < 2; j = j + 2){
-    for (int i = 0; i<36;i++){
-      detNum = j*(i+101);
-      std::cout << "at chamber " << detNum << std::endl;
-      TFile* tmpTF = new TFile("tmp.root","recreate");
-      tt = tmpTr->CopyTree(Form("det_id==%d",detNum));
-      tt->SetBranchAddress("RdPhi_inner_GE11", &mResidual);
-      tt->SetBranchAddress("prop_inner_localx_GE11", &mTrackX);
-      tt->SetBranchAddress("prop_inner_localy_GE11", &mTrackY);
-      tt->SetBranchAddress("prop_inner_r_GE11", &mR);
-      mEvents = tt->GetEntries();
-      doFit(doDx, doDy, doDphiz);
-      dx = mResult[0];
-      dy = mResult[1];
-      dphiz = mResult[2];
-      myfile << detNum << ", " <<dx << ", " << dy << ", " << dz << ", " << dphix << ", " << dphiy << ", " << dphiz << ", " << mEvents << "\n";
+  TFile *tf = new TFile("out_MCcosmic_misalign_1026.root","READ");		//Name of the input ntuple file to fit
+  TTree *tmpTr = (TTree*)tf->Get("analyser/MuonData");				//TTree directory in the ntuple
+  //std::vector<int> nCutList = {30, 15, 8, 4, 2, 1};				//Cut on number of events used in alignment
+  std::vector<int> nCutList = {1};
+  for (int nCut:nCutList) {
+    std::ofstream myfile;
+    myfile.open (Form("CSC_cosmics_iter0.5.csv"));				//Name of output .csv file with suggested alignments
+    TFile* tmpTF = new TFile("tmp1.root","recreate");
+    TTree *cutEn = tmpTr->CopyTree(Form("Entry$%%%d==0",nCut));			//Event cut happens here
+    double dx, dy, dz, dphix, dphiy, dphiz;
+    int detNum;
+    dz = 0.0; dphix = 0.0; dphiy = 0.0;
+    bool doDx = true;								//Option to turn on or off 3 dof alignments
+    bool doDy = false;
+    bool doDphiz = false;
+    for (int j = -1; j < 2; j = j + 2){
+      for (int i = 0; i<36;i++){
+        detNum = j*(i+101);
+        std::cout << "at chamber " << detNum << std::endl;
+        TFile* tmpTF = new TFile("tmp2.root","recreate");
+        tt = cutEn->CopyTree(Form("det_id==%d && abs(RdPhi_CSC_GE11) < 100",detNum));		//Only fits 1 chamber at a time (det_id) and good quality events (res < 100 cm)
+        std::cout << "Entries are " << tt->GetEntries() << std::endl;
+        if (tt->GetEntries() == 0){						//If there are no events on the chamber it is skipped
+          myfile << detNum << ", " << 0 << ", " << 0 << ", " << 0 << ", " << 0 << ", " << 0 << ", " << 0 << ", " << 0 << "\n";
+          continue;
+        }
+        tt->SetBranchAddress("RdPhi_CSC_GE11", &mResidual);			//Variables used, set for CSC propagations
+        tt->SetBranchAddress("prop_CSC_localx_GE11", &mTrackX);			//IF YOU WILL USE INNER PROPAGATIONS
+        tt->SetBranchAddress("prop_CSC_localy_GE11", &mTrackY);			//THEN YOU WILL NEED TO CHANGE THE
+        tt->SetBranchAddress("prop_CSC_r_GE11", &mR);				//VARIABLE NAMES TOO
+        mEvents = tt->GetEntries();
+        doFit(doDx, doDy, doDphiz);
+        dx = mResult[0];
+        dy = mResult[1];
+        dphiz = mResult[2];
+        myfile << detNum << ", " <<dx << ", " << dy << ", " << dz << ", " << dphix << ", " << dphiy << ", " << dphiz << ", " << mEvents << "\n";
+      }
     }
+    myfile.close();
   }
-  myfile.close();
   tf->Close(); 
 }
