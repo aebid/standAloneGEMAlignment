@@ -7,12 +7,15 @@
 #include "TTree.h"
 #include "TFile.h"
 #include "TString.h"
+#include "TH1.h"
+#include "TF1.h"
 
 std::vector<double> mResult = {0., 0., 0., 0.};
 std::vector<double> mError = {0., 0., 0., 0.};
 
 TTree *tt;
-Float_t mResidual, mTrackX, mTrackY, mR;
+//Float_t mResidual, mTrackX, mTrackY, mR;
+Float_t mResidual, mLocalPoint[3], mGlobalPoint[3];
 Long64_t mEvents;
 
 double MuonResidualsFitter_logPureGaussian(double residual, double center, double sigma) {
@@ -34,7 +37,8 @@ void MuonResiduals3DOFFitter_FCN(int &npar, double *gin, double &fval, double *p
   fval = 0.;
   for (Long64_t i=0;i<mEvents;i++) {
     tt->GetEntry(i);
-    double residual = mResidual;  double trackX = mTrackX; double trackY = mTrackY; double R = mR; 
+    //double residual = mResidual;  double trackX = mTrackX; double trackY = mTrackY; double R = mR; 
+    double residual = mResidual; double trackX = mLocalPoint[0]; double trackY = mLocalPoint[1]; double R = pow(pow(mGlobalPoint[0],2) + pow(mGlobalPoint[1],2),0.5);
     double residpeak = getResidual(dx, dy, dphiz, trackX, trackY, R);
     fval += -1.*MuonResidualsFitter_logPureGaussian(residual, residpeak, sig); 
   }
@@ -97,15 +101,15 @@ void doFit(bool doDx, bool doDy, bool doDphiz) {
 }
 
 int main() {
-  TFile *tf = new TFile("out_MCcosmic_misalign_1026.root","READ");		//Name of the input ntuple file to fit
+  TFile *tf = new TFile("out_run341343_may12.root","READ");		//Name of the input ntuple file to fit
   TTree *tmpTr = (TTree*)tf->Get("analyser/MuonData");				//TTree directory in the ntuple
   //std::vector<int> nCutList = {30, 15, 8, 4, 2, 1};				//Cut on number of events used in alignment
   std::vector<int> nCutList = {1};
   for (int nCut:nCutList) {
     std::ofstream myfile;
-    myfile.open (Form("CSC_cosmics_iter0.5.csv"));				//Name of output .csv file with suggested alignments
+    myfile.open (Form("CSC_run341343_iter1.csv"));				//Name of output .csv file with suggested alignments
     TFile* tmpTF = new TFile("tmp1.root","recreate");
-    TTree *cutEn = tmpTr->CopyTree(Form("Entry$%%%d==0",nCut));			//Event cut happens here
+    TTree *cutEn = tmpTr->CopyTree(Form("Entry$%%%d==0 && hasME11",nCut));			//Event cut happens here
     double dx, dy, dz, dphix, dphiy, dphiz;
     int detNum;
     dz = 0.0; dphix = 0.0; dphiy = 0.0;
@@ -116,23 +120,41 @@ int main() {
       for (int i = 0; i<36;i++){
         detNum = j*(i+101);
         std::cout << "at chamber " << detNum << std::endl;
+
         TFile* tmpTF = new TFile("tmp2.root","recreate");
-        tt = cutEn->CopyTree(Form("det_id==%d && abs(RdPhi_CSC_GE11) < 100",detNum));		//Only fits 1 chamber at a time (det_id) and good quality events (res < 100 cm)
-        std::cout << "Entries are " << tt->GetEntries() << std::endl;
+        TTree* tt_tmp = cutEn->CopyTree(Form("det_id==%d && abs(RdPhi_CSC_GE11) < 100",detNum));		//Only fits 1 chamber at a time (det_id) and good quality events (res < 100 cm)
+        std::cout << "Entries are " << tt_tmp->GetEntries() << std::endl;
+
+        TH1F *h1 = new TH1F("h1", "h1 title", 100, -20, 20);
+        tt_tmp->Project("h1", "RdPhi_CSC_GE11", "");
+
+        TF1 f1 = TF1("f1", "gaus", -2, 2);
+        f1.SetParLimits(1, -2, 2);
+        f1.SetParLimits(2, 0, 2);
+        h1->Fit("f1", "R");
+        float fitMean = f1.GetParameter(1);
+        float fitStd = f1.GetParameter(2);
+
+        tt = tt_tmp->CopyTree(Form("RdPhi_CSC_GE11 <= (%f + (1.6*%f)) && RdPhi_CSC_GE11 >= (%f - (1.6*%f))", fitMean, fitStd, fitMean, fitStd));
+
         if (tt->GetEntries() == 0){						//If there are no events on the chamber it is skipped
           myfile << detNum << ", " << 0 << ", " << 0 << ", " << 0 << ", " << 0 << ", " << 0 << ", " << 0 << ", " << 0 << "\n";
+          delete tmpTF;
           continue;
         }
         tt->SetBranchAddress("RdPhi_CSC_GE11", &mResidual);			//Variables used, set for CSC propagations
-        tt->SetBranchAddress("prop_CSC_localx_GE11", &mTrackX);			//IF YOU WILL USE INNER PROPAGATIONS
-        tt->SetBranchAddress("prop_CSC_localy_GE11", &mTrackY);			//THEN YOU WILL NEED TO CHANGE THE
-        tt->SetBranchAddress("prop_CSC_r_GE11", &mR);				//VARIABLE NAMES TOO
+        tt->SetBranchAddress("prop_CSC_LP_GE11", &mLocalPoint);
+        tt->SetBranchAddress("prop_CSC_GP_GE11", &mGlobalPoint);
+        //tt->SetBranchAddress("prop_CSC_LP_GE11[0]", &mTrackX);			//IF YOU WILL USE INNER PROPAGATIONS
+        //tt->SetBranchAddress("prop_CSC_LP_GE11[1]", &mTrackY);			//THEN YOU WILL NEED TO CHANGE THE
+        //tt->SetBranchAddress("prop_CSC_r_GE11", &mR);				//VARIABLE NAMES TOO
         mEvents = tt->GetEntries();
         doFit(doDx, doDy, doDphiz);
         dx = mResult[0];
         dy = mResult[1];
         dphiz = mResult[2];
         myfile << detNum << ", " <<dx << ", " << dy << ", " << dz << ", " << dphix << ", " << dphiy << ", " << dphiz << ", " << mEvents << "\n";
+        delete tmpTF;
       }
     }
     myfile.close();
